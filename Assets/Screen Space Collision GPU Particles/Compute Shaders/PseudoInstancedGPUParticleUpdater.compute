@@ -91,6 +91,11 @@ void Update(uint id : SV_DispatchThreadID)
     Particle p = _Particles[id];
 
     if (p.active) {
+        p.time += _DeltaTime;
+        p.velocity.y += -9.8 * _DeltaTime;
+        p.scale = (1.0 - pow(p.time / p.lifeTime, 3.0)) * _Scale;
+        p.rotation += p.angVelocity * _DeltaTime;
+        
         float3 nextPos = p.position + p.velocity * _DeltaTime;
         float4 vpPos = mul(_ViewProj, float4(nextPos, 1.0));
         float2 uv = vpPos.xy / vpPos.w * 0.5 + 0.5;
@@ -99,17 +104,12 @@ void Update(uint id : SV_DispatchThreadID)
         float3 normal = GetNormal(uv);
 
         if (particleDepth > gbufferDepth) {
+            p.velocity += 9.8 * _DeltaTime;
             p.velocity -= dot(p.velocity, normal) * normal * 1.99 /* 1.0 + bouciness */;
         }
 
-        p.time += _DeltaTime;
-        p.velocity.y += -9.8 * _DeltaTime;
         p.position += p.velocity * _DeltaTime;
-        p.scale = (1.0 - pow(p.time / p.lifeTime, 3.0)) * _Scale;
-        p.rotation += p.angVelocity * _DeltaTime;
-
-        float speed = length(p.velocity) / 5;
-        p.color = float4(0, speed, pow(p.time / p.lifeTime, 2), 1);
+        p.color = float4(0, length(p.velocity) / 5, pow(p.time / p.lifeTime, 2), 1);
 
         if (p.time > p.lifeTime) {
             p.active = false;
