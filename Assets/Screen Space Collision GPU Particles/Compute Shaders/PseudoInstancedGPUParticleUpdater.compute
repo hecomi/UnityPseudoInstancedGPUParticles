@@ -1,0 +1,123 @@
+﻿#pragma kernel Init
+#pragma kernel Emit
+#pragma kernel Update
+
+struct Particle
+{
+    bool active;
+    float3 position;
+    float3 velocity;
+    float3 rotation;
+    float3 angVelocity;
+    float4 color;
+    float scale;
+    float time;
+    float lifeTime;
+};
+
+RWStructuredBuffer<Particle> _Particles;
+AppendStructuredBuffer<uint> _DeadList;
+ConsumeStructuredBuffer<uint> _ParticlePool;
+
+float _DeltaTime;
+float _ScreenWidth;
+float _ScreenHeight;
+float4 _Position;
+float4 _Range;
+float4 _Velocity;
+float4 _AngVelocity;
+float _Scale;
+float _LifeTime;
+
+float4x4 _ViewProj;
+Texture2D<float> _CameraDepthTexture;
+Texture2D<float4> _CameraGBufferTexture2;
+
+inline float GetDepth(float2 uv) 
+{ 
+    float2 coord = float2(uv.x * _ScreenWidth, uv.y * _ScreenHeight);
+    return _CameraDepthTexture[coord].r; 
+}
+
+inline float3 GetNormal(float2 uv) 
+{ 
+    float2 coord = float2(uv.x * _ScreenWidth, uv.y * _ScreenHeight);
+    return _CameraGBufferTexture2[coord].rgb * 2.0 - 1.0; 
+}
+
+inline float rand(float2 seed)
+{
+    return frac(sin(dot(seed.xy, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+inline float3 rand3(float2 seed)
+{
+    return 2.0 * (float3(rand(seed * 1), rand(seed * 2), rand(seed * 3)) - 0.5);
+}
+
+[numthreads(8, 1, 1)]
+void Init(uint id : SV_DispatchThreadID)
+{
+    _Particles[id].active = false;
+    _DeadList.Append(id);
+}
+
+[numthreads(8, 1, 1)]
+void Emit()
+{
+    uint id = _ParticlePool.Consume();
+
+    float2 seed = float2(id + 1, id + 2);
+    float3 randomRange = rand3(seed);
+    float3 randomVelocity = rand3(seed + 1);
+    float3 randomRotation = rand3(seed + 2);
+
+    Particle p = _Particles[id];
+    p.active = true;
+    p.position = randomRange * _Range.xyz + _Position;
+    p.velocity = randomVelocity * _Velocity.xyz;
+    p.rotation = randomRotation * _AngVelocity.xyz;
+    p.angVelocity = p.rotation;
+    p.color = 0;
+    p.scale = 1.0;
+    p.time = 0.0;
+    p.lifeTime = _LifeTime;
+    _Particles[id] = p;
+}
+
+[numthreads(8, 1, 1)]
+void Update(uint id : SV_DispatchThreadID)
+{
+    Particle p = _Particles[id];
+
+    if (p.active) {
+        float3 nextPos = p.position + p.velocity * _DeltaTime;
+        float4 vpPos = mul(_ViewProj, float4(nextPos, 1.0));
+        float2 uv = vpPos.xy / vpPos.w * 0.5 + 0.5;
+        float gbufferDepth = GetDepth(uv);
+        float particleDepth = vpPos.z / vpPos.w;
+        float3 normal = GetNormal(uv);
+
+        if (particleDepth > gbufferDepth) {
+            p.velocity -= dot(p.velocity, normal) * normal * 1.99 /* 1.0 + bouciness */;
+        }
+
+        p.time += _DeltaTime;
+        p.velocity.y += -9.8 * _DeltaTime;
+        p.position += p.velocity * _DeltaTime;
+        p.scale = (1.0 - pow(p.time / p.lifeTime, 3.0)) * _Scale;
+        p.rotation += p.angVelocity * _DeltaTime;
+
+        float speed = length(p.velocity) / 5;
+        p.color = float4(0, speed, pow(p.time / p.lifeTime, 2), 1);
+
+        if (p.time > p.lifeTime) {
+            p.active = false;
+            _DeadList.Append(id);
+        }
+    } else {
+        p.scale = 0;
+    }
+
+    _Particles[id] = p;
+}
